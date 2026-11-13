@@ -125,6 +125,8 @@ public class ConsoleApp {
         System.out.println("  SELECT name, weight FROM fighters WHERE weight > 70 AND is_champion = TRUE;");
         System.out.println("  UPDATE fighters SET is_champion = TRUE WHERE id = 2;");
         System.out.println("  DELETE FROM fighters WHERE name = 'Conor McGregor';");
+        System.out.println("  CREATE TABLE trainers (id INT PRIMARY KEY, name STRING, born DATE);");
+        System.out.println("  DROP TABLE trainers;");
         System.out.println("Служебные: tables - список таблиц, help - справка, exit - выход.");
     }
 }

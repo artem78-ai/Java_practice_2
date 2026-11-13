@@ -95,6 +95,10 @@ public class Database {
             return executeUpdate((Statement.Update) st);
         } else if (st instanceof Statement.Delete) {
             return executeDelete((Statement.Delete) st);
+        } else if (st instanceof Statement.CreateTable) {
+            return executeCreate((Statement.CreateTable) st);
+        } else if (st instanceof Statement.DropTable) {
+            return executeDrop((Statement.DropTable) st);
         }
         throw new DbException("Команда не поддерживается");
     }
@@ -179,6 +183,25 @@ public class Database {
             repository.save(table);
         }
         return QueryResult.ofMessage("Удалено записей: " + count);
+    }
+
+    private QueryResult executeCreate(Statement.CreateTable cr) {
+        Schema schema;
+        try {
+            schema = new Schema(cr.getTable(), cr.getColumns());
+        } catch (IllegalArgumentException e) {
+            throw new DbException(e.getMessage());
+        }
+        addTable(new Table(schema));
+        return QueryResult.ofMessage("Таблица создана: " + cr.getTable());
+    }
+
+    private QueryResult executeDrop(Statement.DropTable dr) {
+        Table table = getTable(dr.getTable());
+        String name = table.getSchema().getTableName();
+        tables.remove(name.toLowerCase());
+        repository.delete(name);
+        return QueryResult.ofMessage("Таблица удалена: " + name);
     }
 
     private int columnIndex(Schema schema, String name) {

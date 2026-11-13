@@ -118,4 +118,46 @@ public interface Statement {
             return "Delete{table=" + table + ", hasWhere=" + (where != Condition.ALL) + "}";
         }
     }
+
+    /** CREATE TABLE таблица (столбец ТИП [PRIMARY KEY], ...). */
+    class CreateTable implements Statement {
+        private final String table;
+        private final List<ufcdb.model.Column> columns;
+
+        /**
+         * @param table   имя новой таблицы
+         * @param columns описание столбцов
+         */
+        public CreateTable(String table, List<ufcdb.model.Column> columns) {
+            this.table = table;
+            this.columns = new ArrayList<>(columns);
+        }
+
+        public String getTable() { return table; }
+        public List<ufcdb.model.Column> getColumns() { return columns; }
+
+        @Override
+        public String toString() {
+            return "CreateTable{table=" + table + ", columns=" + columns.size() + "}";
+        }
+    }
+
+    /** DROP TABLE таблица. */
+    class DropTable implements Statement {
+        private final String table;
+
+        /**
+         * @param table имя удаляемой таблицы
+         */
+        public DropTable(String table) {
+            this.table = table;
+        }
+
+        public String getTable() { return table; }
+
+        @Override
+        public String toString() {
+            return "DropTable{table=" + table + "}";
+        }
+    }
 }

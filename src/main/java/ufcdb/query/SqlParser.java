@@ -1,5 +1,7 @@
 package ufcdb.query;
 
+import ufcdb.model.Column;
+import ufcdb.model.ColumnType;
 import ufcdb.model.DbException;
 
 import java.util.ArrayList;
@@ -48,6 +50,8 @@ public class SqlParser {
                 case "SELECT": return parseSelect();
                 case "UPDATE": return parseUpdate();
                 case "DELETE": return parseDelete();
+                case "CREATE": return parseCreate();
+                case "DROP": return parseDrop();
                 default: break;
             }
         }
@@ -103,6 +107,54 @@ public class SqlParser {
         expectKeyword("FROM");
         String table = expectIdent();
         return new Statement.Delete(table, parseOptionalWhere());
+    }
+
+    private Statement parseCreate() {
+        expectKeyword("TABLE");
+        String table = expectIdent();
+        expectSymbol("(");
+        List<Column> columns = new ArrayList<>();
+        do {
+            String name = expectIdent();
+            ColumnType type = parseType(expectIdent());
+            boolean pk = false;
+            if (acceptKeyword("PRIMARY")) {
+                expectKeyword("KEY");
+                pk = true;
+            }
+            columns.add(new Column(name, type, pk));
+        } while (acceptSymbol(","));
+        expectSymbol(")");
+        long pkCount = 0;
+        for (Column c : columns) {
+            if (c.isPrimaryKey()) pkCount++;
+        }
+        if (pkCount != 1) {
+            throw new DbException("В таблице должен быть ровно один PRIMARY KEY");
+        }
+        return new Statement.CreateTable(table, columns);
+    }
+
+    private Statement parseDrop() {
+        expectKeyword("TABLE");
+        return new Statement.DropTable(expectIdent());
+    }
+
+    private ColumnType parseType(String name) {
+        switch (name.toUpperCase()) {
+            case "INT": case "INTEGER":
+                return ColumnType.INT;
+            case "DOUBLE": case "FLOAT":
+                return ColumnType.DOUBLE;
+            case "STRING": case "VARCHAR": case "TEXT":
+                return ColumnType.STRING;
+            case "DATE":
+                return ColumnType.DATE;
+            case "BOOLEAN": case "BOOL":
+                return ColumnType.BOOLEAN;
+            default:
+                throw new DbException("Неизвестный тип данных: " + name);
+        }
     }
 
     private Condition parseOptionalWhere() {
