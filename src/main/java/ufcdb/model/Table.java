@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Таблица в памяти: схема, список записей и справочник первичных ключей
@@ -81,6 +83,95 @@ public class Table {
             rows.add(row);
             pkMap.put(row.get(pk), row);
         }
+    }
+
+    /**
+     * Находит записи, удовлетворяющие условию.
+     *
+     * @param filter условие отбора
+     * @return список подходящих записей
+     */
+    public List<Row> find(Predicate<Row> filter) {
+        List<Row> result = new ArrayList<>();
+        for (Row row : rows) {
+            if (filter.test(row)) {
+                result.add(row);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Обновляет записи, удовлетворяющие условию. Операция атомарна: сначала
+     * проверяются все изменения, и только потом применяются.
+     *
+     * @param filter  условие отбора записей
+     * @param changes новые значения: номер столбца -> значение
+     * @return количество обновлённых записей
+     * @throws DbException при неверном типе значения или нарушении уникальности ключа
+     */
+    public int update(Predicate<Row> filter, Map<Integer, Object> changes) {
+        int pk = schema.primaryKeyIndex();
+        List<Column> columns = schema.getColumns();
+        for (Map.Entry<Integer, Object> e : changes.entrySet()) {
+            Column c = columns.get(e.getKey());
+            if (!c.getType().accepts(e.getValue())) {
+                throw new DbException("Столбец '" + c.getName() + "' имеет тип " + c.getType()
+                        + ", а значение: " + e.getValue());
+            }
+        }
+        List<Row> matched = find(filter);
+        if (matched.isEmpty()) {
+            return 0;
+        }
+        boolean pkChanges = changes.containsKey(pk);
+        Object newKey = null;
+        if (pkChanges) {
+            newKey = changes.get(pk);
+            if (newKey == null) {
+                throw new DbException("Первичный ключ не может быть пустым");
+            }
+            if (matched.size() > 1) {
+                throw new DbException("Нельзя присвоить один первичный ключ нескольким записям");
+            }
+            Row owner = pkMap.get(newKey);
+            if (owner != null && owner != matched.get(0)) {
+                throw new DbException("Нарушение уникальности первичного ключа: " + newKey);
+            }
+        }
+        for (Row row : matched) {
+            if (pkChanges) {
+                pkMap.remove(row.get(pk));
+            }
+            for (Map.Entry<Integer, Object> e : changes.entrySet()) {
+                row.set(e.getKey(), e.getValue());
+            }
+            if (pkChanges) {
+                pkMap.put(newKey, row);
+            }
+        }
+        return matched.size();
+    }
+
+    /**
+     * Удаляет записи, удовлетворяющие условию.
+     *
+     * @param filter условие отбора записей
+     * @return количество удалённых записей
+     */
+    public int delete(Predicate<Row> filter) {
+        int pk = schema.primaryKeyIndex();
+        int count = 0;
+        Iterator<Row> it = rows.iterator();
+        while (it.hasNext()) {
+            Row row = it.next();
+            if (filter.test(row)) {
+                pkMap.remove(row.get(pk));
+                it.remove();
+                count++;
+            }
+        }
+        return count;
     }
 
     private void validate(Row row) {
