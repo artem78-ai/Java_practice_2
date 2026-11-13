@@ -1,0 +1,7 @@
+out/
+*.class
+.idea/
+*.iml
+data/*.tbl
+data/*.idx
+.DS_Store
