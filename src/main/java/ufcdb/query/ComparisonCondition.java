@@ -4,6 +4,7 @@ import ufcdb.model.ColumnType;
 import ufcdb.model.DbException;
 import ufcdb.model.Row;
 import ufcdb.model.Schema;
+import ufcdb.model.ValueCoercer;
 
 import java.util.function.Predicate;
 
@@ -16,7 +17,7 @@ public class ComparisonCondition implements Condition {
     /**
      * @param column   имя столбца
      * @param operator оператор сравнения
-     * @param value    значение, с которым сравнивается столбец (не null)
+     * @param value    значение из запроса (будет приведено к типу столбца)
      */
     public ComparisonCondition(String column, Operator operator, Object value) {
         this.column = column;
@@ -46,14 +47,17 @@ public class ComparisonCondition implements Condition {
             throw new DbException(e.getMessage());
         }
         ColumnType type = schema.getColumns().get(idx).getType();
-        if (value == null || !type.accepts(value)) {
+        final Object typed;
+        try {
+            typed = ValueCoercer.coerce(type, value);
+        } catch (DbException e) {
             throw new DbException("Значение '" + value + "' не подходит для столбца '"
                     + column + "' типа " + type);
         }
         return row -> {
             Object actual = row.get(idx);
             if (actual == null) return false;
-            return operator.matches(((Comparable) actual).compareTo(value));
+            return operator.matches(((Comparable) actual).compareTo(typed));
         };
     }
 }
