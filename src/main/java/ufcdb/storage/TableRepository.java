@@ -172,7 +172,7 @@ public class TableRepository {
         }
     }
 
-    private void writeValue(DataOutputStream out, ColumnType type, Object v) throws IOException {
+    static void writeValue(DataOutputStream out, ColumnType type, Object v) throws IOException {
         out.writeBoolean(v == null);
         if (v == null) return;
         switch (type) {
@@ -185,7 +185,7 @@ public class TableRepository {
         }
     }
 
-    private Object readValue(DataInputStream in, ColumnType type) throws IOException {
+    static Object readValue(DataInputStream in, ColumnType type) throws IOException {
         if (in.readBoolean()) return null;
         switch (type) {
             case INT:     return in.readInt();

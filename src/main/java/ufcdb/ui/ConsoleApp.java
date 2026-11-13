@@ -4,6 +4,7 @@ import ufcdb.engine.Database;
 import ufcdb.engine.DemoData;
 import ufcdb.engine.QueryResult;
 import ufcdb.model.DbException;
+import ufcdb.storage.IndexRepository;
 import ufcdb.storage.TableRepository;
 
 import java.nio.file.Paths;
@@ -22,7 +23,8 @@ public class ConsoleApp {
      * @param args не используются
      */
     public static void main(String[] args) {
-        Database db = new Database(new TableRepository(Paths.get("data")));
+        Database db = new Database(new TableRepository(Paths.get("data")),
+                new IndexRepository(Paths.get("data")));
         if (db.isEmpty()) {
             DemoData.populate(db);
             System.out.println("База была пустой, созданы учебные таблицы divisions и fighters.");
@@ -57,7 +59,6 @@ public class ConsoleApp {
                 buffer.setLength(0);
             }
         }
-        System.out.println("До свидания!");
     }
 
     private static void run(Database db, String sql) {
@@ -65,6 +66,9 @@ public class ConsoleApp {
             QueryResult result = db.execute(sql);
             if (result.hasRows()) {
                 printTable(result.getColumns(), result.getRows());
+                if (db.getLastUsedIndex() != null) {
+                    System.out.println("Использован индекс: " + db.getLastUsedIndex());
+                }
             } else {
                 System.out.println(result.getMessage());
             }
@@ -127,6 +131,8 @@ public class ConsoleApp {
         System.out.println("  DELETE FROM fighters WHERE name = 'Conor McGregor';");
         System.out.println("  CREATE TABLE trainers (id INT PRIMARY KEY, name STRING, born DATE);");
         System.out.println("  DROP TABLE trainers;");
+        System.out.println("  CREATE INDEX idx_fighters_name ON fighters (name);");
+        System.out.println("  DROP INDEX idx_fighters_name;");
         System.out.println("Служебные: tables - список таблиц, help - справка, exit - выход.");
     }
 }

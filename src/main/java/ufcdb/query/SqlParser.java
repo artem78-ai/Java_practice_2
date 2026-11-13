@@ -110,6 +110,9 @@ public class SqlParser {
     }
 
     private Statement parseCreate() {
+        if (acceptKeyword("INDEX")) {
+            return parseCreateIndex();
+        }
         expectKeyword("TABLE");
         String table = expectIdent();
         expectSymbol("(");
@@ -143,7 +146,20 @@ public class SqlParser {
         return new Statement.CreateTable(table, columns);
     }
 
+    private Statement parseCreateIndex() {
+        String name = expectIdent();
+        expectKeyword("ON");
+        String table = expectIdent();
+        expectSymbol("(");
+        String column = expectIdent();
+        expectSymbol(")");
+        return new Statement.CreateIndex(name, table, column);
+    }
+
     private Statement parseDrop() {
+        if (acceptKeyword("INDEX")) {
+            return new Statement.DropIndex(expectIdent());
+        }
         expectKeyword("TABLE");
         return new Statement.DropTable(expectIdent());
     }

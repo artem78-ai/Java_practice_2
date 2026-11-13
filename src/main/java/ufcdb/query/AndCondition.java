@@ -18,6 +18,11 @@ public class AndCondition implements Condition {
         this.parts = new ArrayList<>(parts);
     }
 
+    /** @return части условия, соединённые через AND */
+    public List<Condition> getParts() {
+        return java.util.Collections.unmodifiableList(parts);
+    }
+
     @Override
     public Predicate<Row> bind(Schema schema) {
         Predicate<Row> result = row -> true;

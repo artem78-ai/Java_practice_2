@@ -1,17 +1,24 @@
 package ufcdb.engine;
 
+import ufcdb.index.Index;
 import ufcdb.model.Column;
 import ufcdb.model.DbException;
 import ufcdb.model.Row;
 import ufcdb.model.Schema;
 import ufcdb.model.Table;
 import ufcdb.model.ValueCoercer;
+import ufcdb.query.AndCondition;
+import ufcdb.query.ComparisonCondition;
+import ufcdb.query.Condition;
+import ufcdb.query.Operator;
 import ufcdb.query.SqlParser;
 import ufcdb.query.Statement;
+import ufcdb.storage.IndexRepository;
 import ufcdb.storage.TableRepository;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,15 +32,22 @@ import java.util.function.Predicate;
 public class Database {
     private final TableRepository repository;
     private final Map<String, Table> tables;
+    private final IndexRepository indexRepository;
+    private final Map<String, Index> indexes;
+    private String lastUsedIndex;
 
     /**
      * Создаёт базу и загружает все таблицы с диска.
      *
-     * @param repository репозиторий файлов данных
+     * @param repository      репозиторий файлов таблиц
+     * @param indexRepository репозиторий файлов индексов
      */
-    public Database(TableRepository repository) {
+    public Database(TableRepository repository, IndexRepository indexRepository) {
         this.repository = repository;
+        this.indexRepository = indexRepository;
         this.tables = repository.loadAll();
+        this.indexes = indexRepository.loadAll(tables);
+        validateIndexes();
     }
 
     /** @return true, если в базе нет ни одной таблицы */
@@ -101,6 +115,10 @@ public class Database {
             return executeCreate((Statement.CreateTable) st);
         } else if (st instanceof Statement.DropTable) {
             return executeDrop((Statement.DropTable) st);
+        } else if (st instanceof Statement.CreateIndex) {
+            return executeCreateIndex((Statement.CreateIndex) st);
+        } else if (st instanceof Statement.DropIndex) {
+            return executeDropIndex((Statement.DropIndex) st);
         }
         throw new DbException("Команда не поддерживается");
     }
@@ -131,6 +149,7 @@ public class Database {
         checkForeignKeys(table, newRows);
         table.insertAll(newRows);
         repository.save(table);
+        refreshIndexes(table);
         return QueryResult.ofMessage("Вставлено записей: " + newRows.size());
     }
 
@@ -154,7 +173,7 @@ public class Database {
         }
         Predicate<Row> filter = sel.getWhere().bind(schema);
         List<Object[]> result = new ArrayList<>();
-        for (Row row : table.find(filter)) {
+        for (Row row : selectRows(table, sel.getWhere(), filter)) {
             Object[] out = new Object[indexes.size()];
             for (int i = 0; i < out.length; i++) {
                 out[i] = row.get(indexes.get(i));
@@ -177,6 +196,7 @@ public class Database {
         int count = table.update(filter, changes);
         if (count > 0) {
             repository.save(table);
+            refreshIndexes(table);
         }
         return QueryResult.ofMessage("Обновлено записей: " + count);
     }
@@ -188,6 +208,7 @@ public class Database {
         int count = table.delete(filter);
         if (count > 0) {
             repository.save(table);
+            refreshIndexes(table);
         }
         return QueryResult.ofMessage("Удалено записей: " + count);
     }
@@ -220,6 +241,7 @@ public class Database {
         }
         tables.remove(name.toLowerCase());
         repository.delete(name);
+        dropIndexesOf(name);
         return QueryResult.ofMessage("Таблица удалена: " + name);
     }
 
@@ -312,6 +334,130 @@ public class Database {
                 }
             }
         }
+    }
+
+    private QueryResult executeCreateIndex(Statement.CreateIndex ci) {
+        if (indexes.containsKey(ci.getName().toLowerCase())) {
+            throw new DbException("Индекс уже существует: " + ci.getName());
+        }
+        Table table = getTable(ci.getTable());
+        Schema schema = table.getSchema();
+        int col = columnIndex(schema, ci.getColumn());
+        Index index = new Index(ci.getName(), schema.getTableName(), schema.getColumns().get(col).getName());
+        index.rebuild(table);
+        indexRepository.save(index, table);
+        indexes.put(ci.getName().toLowerCase(), index);
+        return QueryResult.ofMessage("Индекс создан: " + ci.getName());
+    }
+
+    private QueryResult executeDropIndex(Statement.DropIndex di) {
+        Index index = indexes.remove(di.getName().toLowerCase());
+        if (index == null) {
+            throw new DbException("Нет индекса: " + di.getName());
+        }
+        indexRepository.delete(index.getName());
+        return QueryResult.ofMessage("Индекс удалён: " + index.getName());
+    }
+
+    /** @return имя индекса, использованного в последнем SELECT, или null */
+    public String getLastUsedIndex() {
+        return lastUsedIndex;
+    }
+
+    /** Проверяет индексы после загрузки: при расхождении с таблицей перестраивает их. */
+    private void validateIndexes() {
+        for (Index idx : indexes.values()) {
+            Table table = tables.get(idx.getTableName().toLowerCase());
+            int col = table.getSchema().indexOf(idx.getColumnName());
+            int expected = 0;
+            for (Row r : table.getRows()) {
+                if (r.get(col) != null) {
+                    expected++;
+                }
+            }
+            if (idx.size() != expected) {
+                idx.rebuild(table);
+                indexRepository.save(idx, table);
+            }
+        }
+    }
+
+    /** Перестраивает и сохраняет все индексы таблицы после её изменения. */
+    private void refreshIndexes(Table table) {
+        String name = table.getSchema().getTableName();
+        for (Index idx : indexes.values()) {
+            if (idx.getTableName().equalsIgnoreCase(name)) {
+                idx.rebuild(table);
+                indexRepository.save(idx, table);
+            }
+        }
+    }
+
+    /** Удаляет все индексы таблицы (при DROP TABLE). */
+    private void dropIndexesOf(String tableName) {
+        Iterator<Index> it = indexes.values().iterator();
+        while (it.hasNext()) {
+            Index idx = it.next();
+            if (idx.getTableName().equalsIgnoreCase(tableName)) {
+                it.remove();
+                indexRepository.delete(idx.getName());
+            }
+        }
+    }
+
+    private Index findIndex(Table table, String column) {
+        String tableName = table.getSchema().getTableName();
+        for (Index idx : indexes.values()) {
+            if (idx.getTableName().equalsIgnoreCase(tableName)
+                    && idx.getColumnName().equalsIgnoreCase(column)) {
+                return idx;
+            }
+        }
+        return null;
+    }
+
+    private List<ComparisonCondition> comparisons(Condition where) {
+        List<ComparisonCondition> list = new ArrayList<>();
+        if (where instanceof ComparisonCondition) {
+            list.add((ComparisonCondition) where);
+        } else if (where instanceof AndCondition) {
+            for (Condition c : ((AndCondition) where).getParts()) {
+                if (c instanceof ComparisonCondition) {
+                    list.add((ComparisonCondition) c);
+                }
+            }
+        }
+        return list;
+    }
+
+    /**
+     * Выбирает записи для SELECT: через индекс, если в условии есть сравнение
+     * по индексированному столбцу, иначе полным перебором таблицы.
+     */
+    private List<Row> selectRows(Table table, Condition where, Predicate<Row> filter) {
+        Schema schema = table.getSchema();
+        for (ComparisonCondition cc : comparisons(where)) {
+            if (cc.getOperator() == Operator.NE) {
+                continue;
+            }
+            Index idx = findIndex(table, cc.getColumn());
+            if (idx == null) {
+                continue;
+            }
+            int col = columnIndex(schema, cc.getColumn());
+            Object value = ValueCoercer.coerce(schema.getColumns().get(col).getType(), cc.getValue());
+            List<Row> result = new ArrayList<>();
+            for (Object pk : idx.lookup(cc.getOperator(), value)) {
+                Row row = table.findByKey(pk);
+                if (row != null && filter.test(row)) {
+                    result.add(row);
+                }
+            }
+            lastUsedIndex = idx.getName();
+            return result;
+        }
+        lastUsedIndex = null;
+        return table.find(filter);
     }
 
     private int columnIndex(Schema schema, String name) {

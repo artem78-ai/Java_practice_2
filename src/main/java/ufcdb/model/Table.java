@@ -174,6 +174,16 @@ public class Table {
         return count;
     }
 
+    /**
+     * Находит запись по значению первичного ключа.
+     *
+     * @param key значение первичного ключа
+     * @return запись или null, если такой нет
+     */
+    public Row findByKey(Object key) {
+        return pkMap.get(key);
+    }
+
     private void validate(Row row) {
         List<Column> columns = schema.getColumns();
         if (row.size() != columns.size()) {
