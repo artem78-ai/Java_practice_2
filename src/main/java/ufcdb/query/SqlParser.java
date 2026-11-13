@@ -122,7 +122,15 @@ public class SqlParser {
                 expectKeyword("KEY");
                 pk = true;
             }
-            columns.add(new Column(name, type, pk));
+            String refTable = null;
+            String refColumn = null;
+            if (acceptKeyword("REFERENCES")) {
+                refTable = expectIdent();
+                expectSymbol("(");
+                refColumn = expectIdent();
+                expectSymbol(")");
+            }
+            columns.add(new Column(name, type, pk, refTable, refColumn));
         } while (acceptSymbol(","));
         expectSymbol(")");
         long pkCount = 0;

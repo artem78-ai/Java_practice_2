@@ -30,7 +30,7 @@ import java.util.Map;
  * данные при аварийном завершении программы.
  */
 public class TableRepository {
-    private static final int MAGIC = 0x55464344; // "UFCD"
+    private static final int MAGIC = 0x55464345; // "UFCE", версия формата с внешними ключами
     private static final String EXT = ".tbl";
     private static final String TMP_EXT = ".tbl.tmp";
 
@@ -126,7 +126,13 @@ public class TableRepository {
                 String colName = in.readUTF();
                 ColumnType type = ColumnType.valueOf(in.readUTF());
                 boolean pk = in.readBoolean();
-                columns.add(new Column(colName, type, pk));
+                String refTable = null;
+                String refColumn = null;
+                if (in.readBoolean()) {
+                    refTable = in.readUTF();
+                    refColumn = in.readUTF();
+                }
+                columns.add(new Column(colName, type, pk, refTable, refColumn));
             }
             Table table = new Table(new Schema(tableName, columns));
             int rowCount = in.readInt();
@@ -152,6 +158,11 @@ public class TableRepository {
             out.writeUTF(c.getName());
             out.writeUTF(c.getType().name());
             out.writeBoolean(c.isPrimaryKey());
+            out.writeBoolean(c.isForeignKey());
+            if (c.isForeignKey()) {
+                out.writeUTF(c.getRefTable());
+                out.writeUTF(c.getRefColumn());
+            }
         }
         out.writeInt(table.size());
         for (Row row : table.getRows()) {

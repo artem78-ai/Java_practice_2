@@ -41,7 +41,7 @@ public final class DemoData {
                 new Column("weight", ColumnType.DOUBLE, false),
                 new Column("birth_date", ColumnType.DATE, false),
                 new Column("is_champion", ColumnType.BOOLEAN, false),
-                new Column("division_id", ColumnType.INT, false))));
+                new Column("division_id", ColumnType.INT, false, "divisions", "id"))));
         fighters.insertAll(Arrays.asList(
                 new Row(new Object[]{1, "Islam Makhachev", 70.0, LocalDate.of(1991, 10, 27), true, 4}),
                 new Row(new Object[]{2, "Khabib Nurmagomedov", 70.0, LocalDate.of(1988, 9, 20), false, 4}),

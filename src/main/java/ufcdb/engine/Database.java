@@ -11,9 +11,11 @@ import ufcdb.query.Statement;
 import ufcdb.storage.TableRepository;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -126,6 +128,7 @@ public class Database {
             }
             newRows.add(new Row(arr));
         }
+        checkForeignKeys(table, newRows);
         table.insertAll(newRows);
         repository.save(table);
         return QueryResult.ofMessage("Вставлено записей: " + newRows.size());
@@ -169,7 +172,9 @@ public class Database {
             int idx = columnIndex(schema, e.getKey());
             changes.put(idx, ValueCoercer.coerce(schema.getColumns().get(idx).getType(), e.getValue()));
         }
-        int count = table.update(upd.getWhere().bind(schema), changes);
+        Predicate<Row> filter = upd.getWhere().bind(schema);
+        checkUpdateForeignKeys(table, filter, changes);
+        int count = table.update(filter, changes);
         if (count > 0) {
             repository.save(table);
         }
@@ -178,7 +183,9 @@ public class Database {
 
     private QueryResult executeDelete(Statement.Delete del) {
         Table table = getTable(del.getTable());
-        int count = table.delete(del.getWhere().bind(table.getSchema()));
+        Predicate<Row> filter = del.getWhere().bind(table.getSchema());
+        checkNotReferenced(table, table.find(filter));
+        int count = table.delete(filter);
         if (count > 0) {
             repository.save(table);
         }
@@ -192,6 +199,7 @@ public class Database {
         } catch (IllegalArgumentException e) {
             throw new DbException(e.getMessage());
         }
+        checkReferences(schema);
         addTable(new Table(schema));
         return QueryResult.ofMessage("Таблица создана: " + cr.getTable());
     }
@@ -199,9 +207,111 @@ public class Database {
     private QueryResult executeDrop(Statement.DropTable dr) {
         Table table = getTable(dr.getTable());
         String name = table.getSchema().getTableName();
+        for (Table other : tables.values()) {
+            if (other == table) {
+                continue;
+            }
+            for (Column c : other.getSchema().getColumns()) {
+                if (c.isForeignKey() && c.getRefTable().equalsIgnoreCase(name)) {
+                    throw new DbException("Нельзя удалить таблицу " + name
+                            + ": на неё ссылается таблица " + other.getSchema().getTableName());
+                }
+            }
+        }
         tables.remove(name.toLowerCase());
         repository.delete(name);
         return QueryResult.ofMessage("Таблица удалена: " + name);
+    }
+
+    /** Проверяет, что внешние ключи новой таблицы указывают на существующие первичные ключи. */
+    private void checkReferences(Schema schema) {
+        for (Column c : schema.getColumns()) {
+            if (!c.isForeignKey()) {
+                continue;
+            }
+            if (c.getRefTable().equalsIgnoreCase(schema.getTableName())) {
+                throw new DbException("Ссылка таблицы на саму себя не поддерживается");
+            }
+            Table parent = getTable(c.getRefTable());
+            Schema ps = parent.getSchema();
+            int refIdx = columnIndex(ps, c.getRefColumn());
+            if (refIdx != ps.primaryKeyIndex()) {
+                throw new DbException("Внешний ключ должен ссылаться на первичный ключ таблицы "
+                        + ps.getTableName());
+            }
+            if (ps.getColumns().get(refIdx).getType() != c.getType()) {
+                throw new DbException("Тип столбца '" + c.getName() + "' не совпадает с типом "
+                        + ps.getTableName() + "." + c.getRefColumn());
+            }
+        }
+    }
+
+    /** Проверяет, что вставляемые записи ссылаются на существующие записи родительских таблиц. */
+    private void checkForeignKeys(Table table, List<Row> rows) {
+        List<Column> cols = table.getSchema().getColumns();
+        for (int i = 0; i < cols.size(); i++) {
+            Column c = cols.get(i);
+            if (!c.isForeignKey()) {
+                continue;
+            }
+            Table parent = getTable(c.getRefTable());
+            for (Row row : rows) {
+                checkParentExists(c, parent, row.get(i));
+            }
+        }
+    }
+
+    private void checkParentExists(Column c, Table parent, Object value) {
+        if (value != null && !parent.containsKey(value)) {
+            throw new DbException("Нарушение внешнего ключа: в таблице " + c.getRefTable()
+                    + " нет записи с " + c.getRefColumn() + " = " + value);
+        }
+    }
+
+    /** Проверяет ограничения перед UPDATE: новые значения внешних ключей и смена первичного ключа. */
+    private void checkUpdateForeignKeys(Table table, Predicate<Row> filter, Map<Integer, Object> changes) {
+        Schema schema = table.getSchema();
+        for (Map.Entry<Integer, Object> e : changes.entrySet()) {
+            Column c = schema.getColumns().get(e.getKey());
+            if (c.isForeignKey()) {
+                checkParentExists(c, getTable(c.getRefTable()), e.getValue());
+            }
+        }
+        if (changes.containsKey(schema.primaryKeyIndex())) {
+            checkNotReferenced(table, table.find(filter));
+        }
+    }
+
+    /** Запрещает изменять или удалять записи, на которые ссылаются другие таблицы. */
+    private void checkNotReferenced(Table table, List<Row> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        String name = table.getSchema().getTableName();
+        int pk = table.getSchema().primaryKeyIndex();
+        Set<Object> keys = new HashSet<>();
+        for (Row r : rows) {
+            keys.add(r.get(pk));
+        }
+        for (Table child : tables.values()) {
+            if (child == table) {
+                continue;
+            }
+            List<Column> cc = child.getSchema().getColumns();
+            for (int i = 0; i < cc.size(); i++) {
+                Column c = cc.get(i);
+                if (!c.isForeignKey() || !c.getRefTable().equalsIgnoreCase(name)) {
+                    continue;
+                }
+                for (Row r : child.getRows()) {
+                    Object v = r.get(i);
+                    if (v != null && keys.contains(v)) {
+                        throw new DbException("Нельзя изменить или удалить запись " + v
+                                + ": на неё ссылается таблица " + child.getSchema().getTableName());
+                    }
+                }
+            }
+        }
     }
 
     private int columnIndex(Schema schema, String name) {
